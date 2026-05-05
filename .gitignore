@@ -1,0 +1,9 @@
+data/uploads/
+data/processed/
+data/models/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+.agents
+optimized.md

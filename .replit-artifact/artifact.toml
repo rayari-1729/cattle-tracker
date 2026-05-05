@@ -1,0 +1,22 @@
+kind = "web"
+previewPath = "/"
+title = "Cattle Tracker"
+version = "1.0.0"
+id = "artifacts/cattle-tracker"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21497
+
+[services.development]
+run = "streamlit run /home/runner/workspace/artifacts/cattle-tracker/app.py --server.port $PORT --server.baseUrlPath / --server.headless true --server.address 0.0.0.0"
+
+[services.env]
+PORT = "21497"
+BASE_PATH = "/"

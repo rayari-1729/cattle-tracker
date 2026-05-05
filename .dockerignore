@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.agents/
+.replit-artifact/
+data/uploads/
+data/processed/
+data/models/
+data/snapshots/
+data/herd.json
+cattle-tracker.zip

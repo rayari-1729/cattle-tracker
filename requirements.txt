@@ -1,0 +1,6 @@
+streamlit>=1.40
+ultralytics>=8.4
+opencv-python-headless>=4.10
+numpy>=1.26,<2.3
+pillow>=10
+lap>=0.5
