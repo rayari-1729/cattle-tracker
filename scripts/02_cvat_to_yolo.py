@@ -38,7 +38,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.00_setup_drive import (  # type: ignore
+from scripts.setup_drive import (  # type: ignore
     VERSION_FOLDERS, FRAMES_DIR, YOLO_DIR, SPLITS_DIR,
 )
 

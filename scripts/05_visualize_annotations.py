@@ -16,7 +16,7 @@ import sys
 import random
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.00_setup_drive import FRAMES_DIR, PROCESSED_DIR, VERSION_FOLDERS  # type: ignore
+from scripts.setup_drive import FRAMES_DIR, PROCESSED_DIR, VERSION_FOLDERS  # type: ignore
 
 BEHAVIOR_COLORS = {
     "standing":   (0,   220,   0),

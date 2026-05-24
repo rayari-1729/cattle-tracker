@@ -29,7 +29,7 @@ import sys
 
 # Allow running from experiment/ root without install
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.00_setup_drive import FRAMES_DIR, VERSION_FOLDERS   # type: ignore
+from scripts.setup_drive import FRAMES_DIR, VERSION_FOLDERS   # type: ignore
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -27,7 +27,7 @@ import argparse
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.00_setup_drive import VERSION_FOLDERS, FRAMES_DIR, CROPS_DIR  # type: ignore
+from scripts.setup_drive import VERSION_FOLDERS, FRAMES_DIR, CROPS_DIR  # type: ignore
 
 BEHAVIORS = [
     "standing", "eating", "walking", "drinking",

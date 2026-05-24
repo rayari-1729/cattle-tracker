@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.00_setup_drive import YOLO_DIR, CROPS_DIR  # type: ignore
+from scripts.setup_drive import YOLO_DIR, CROPS_DIR  # type: ignore
 
 BEHAVIORS = [
     "standing", "eating", "walking", "drinking",
