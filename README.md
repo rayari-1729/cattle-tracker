@@ -210,10 +210,10 @@ python inference/pipeline.py \
 
 ## 📚 Reference
 
-- Full architecture decisions: [`cookbook/CATTLE_ANALYTICS_COOKBOOK.md`](cookbook/CATTLE_ANALYTICS_COOKBOOK.md)
-- Annotation guidelines: see §12 of the cookbook
-- Iteration checklist: see §13 of the cookbook
+- Full architecture decisions: Aritra 
+- Annotation guidelines: Nill
+- Iteration checklist: Nill
 
 ---
 
-*Maintained by CV Engineering Team · Updated: May 2026 · Version: Phase-1 (10 videos)*
+*Maintained by Aritra & Nimai  · Updated: May 2026 · Version: Phase-1 (10 videos)*
