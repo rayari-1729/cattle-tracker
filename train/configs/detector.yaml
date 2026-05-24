@@ -1,0 +1,44 @@
+# detector.yaml
+# YOLOv8 calf detector training config
+# Reference: Cattle Analytics Cookbook §6.1
+# Edit batch / imgsz based on GPU:
+#   A100 40GB: batch=16, imgsz=1280
+#   T4  16GB : batch=4,  imgsz=1280
+
+model: yolov8s.pt          # start with 's'; upgrade to 'm' if mAP < 0.75 after 5 rounds
+# data path is set programmatically in train_detector.py
+
+epochs: 100
+patience: 20               # early stopping — stop if no improvement for 20 epochs
+
+imgsz: 1280                # match extracted frame width
+batch: 8                   # safe for A100; reduce to 4 for T4
+workers: 4
+
+# Optimizer
+optimizer: AdamW
+lr0: 0.001
+lrf: 0.01
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 3.0
+
+# Augmentation — tuned for indoor pen, top-down/angled fixed camera
+augment: true
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.5                 # 0.5 (up from 0.4) to handle backlight variation
+degrees: 5.0               # slight rotation — camera is fixed
+translate: 0.1
+scale: 0.5
+shear: 2.0
+perspective: 0.0005
+flipud: 0.0                # top-down view — no vertical flip
+fliplr: 0.5                # horizontal flip OK
+mosaic: 0.5                # reduced from 1.0 — small dataset
+mixup: 0.0
+copy_paste: 0.0
+
+# Saving
+save_period: 10
+plots: true
