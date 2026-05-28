@@ -129,45 +129,97 @@ def generate_crops_for_version(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Incremental processing helpers
+# ─────────────────────────────────────────────────────────────────────────────
+def _crop_done_path(version_name: str) -> Path:
+    """Path to the per-version done sentinel inside CROPS_DIR."""
+    return CROPS_DIR / f".done_{version_name}.json"
+
+
+def is_cropped(version_name: str) -> bool:
+    return _crop_done_path(version_name).exists()
+
+
+def load_crop_record(version_name: str) -> dict:
+    return json.loads(_crop_done_path(version_name).read_text())
+
+
+def save_crop_record(version_name: str, counts: dict) -> None:
+    CROPS_DIR.mkdir(parents=True, exist_ok=True)
+    _crop_done_path(version_name).write_text(json.dumps(counts, indent=2))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--padding", type=float, default=0.15,
+    parser.add_argument("--padding",  type=float, default=0.15,
                         help="Bbox padding ratio (default 0.15 = 15%)")
     parser.add_argument("--target_w", type=int, default=1280)
     parser.add_argument("--target_h", type=int, default=720)
+    parser.add_argument(
+        "--force", nargs="*", metavar="VERSION",
+        help=(
+            "Force re-crop even if already done. "
+            "Pass specific versions (e.g. --force v13 v14) or bare --force for ALL."
+        ),
+    )
     args = parser.parse_args()
+
+    # Resolve force flags
+    force_all = args.force is not None and len(args.force) == 0
+    force_set = set(args.force) if args.force else set()
 
     target_size = (args.target_w, args.target_h)
     CROPS_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n✂️  Behavior Crop Generation — padding={args.padding}")
+    print(f"\n✂️  Behavior Crop Generation  [incremental]  — padding={args.padding}")
     print(f"   Output: {CROPS_DIR}\n")
 
     global_counts: dict[str, int] = {b: 0 for b in BEHAVIORS}
 
     for vdir in VERSION_FOLDERS:
+        force_this = force_all or (vdir.name in force_set)
+
+        # ── Skip if already done ─────────────────────────────────────────────
+        if is_cropped(vdir.name) and not force_this:
+            cached = load_crop_record(vdir.name)
+            print(f"  ⏭️  [{vdir.name}] already cropped — skipping "
+                  f"(use --force {vdir.name} to redo)")
+            for b, c in cached.items():
+                global_counts[b] = global_counts.get(b, 0) + c
+            continue
+
+        # ── Generate crops ───────────────────────────────────────────────────
         counts = generate_crops_for_version(
             vdir, FRAMES_DIR, CROPS_DIR, args.padding, target_size
         )
         if counts:
+            save_crop_record(vdir.name, counts)   # ← write sentinel
             print(f"  ✅ [{vdir.name}] crops: {counts}")
             for b, c in counts.items():
                 global_counts[b] = global_counts.get(b, 0) + c
 
-    # Summary
-    (CROPS_DIR / "crop_stats.json").write_text(json.dumps(global_counts, indent=2))
+    # ── Always rebuild global crop_stats.json from all sentinels ─────────────
+    # (ensures the file is complete even when old versions were skipped)
+    merged: dict[str, int] = {b: 0 for b in BEHAVIORS}
+    for vdir in VERSION_FOLDERS:
+        if is_cropped(vdir.name):
+            for b, c in load_crop_record(vdir.name).items():
+                merged[b] = merged.get(b, 0) + c
+
+    (CROPS_DIR / "crop_stats.json").write_text(json.dumps(merged, indent=2))
 
     print(f"\n✅ Crop generation complete:")
-    total = sum(global_counts.values())
-    for b, c in sorted(global_counts.items(), key=lambda x: -x[1]):
-        pct = 100 * c / max(total, 1)
-        status = "⚠️ LOW" if c < 200 else ("❌ MISSING" if c == 0 else "✅")
+    total = sum(merged.values())
+    for b, c in sorted(merged.items(), key=lambda x: -x[1]):
+        pct    = 100 * c / max(total, 1)
+        status = "❌ MISSING" if c == 0 else ("⚠️ LOW" if c < 200 else "✅")
         print(f"   {b:15s}: {c:5d} ({pct:5.1f}%)  {status}")
 
     print(f"\n   Total crops: {total}")
     print(f"   Stats saved: {CROPS_DIR / 'crop_stats.json'}")
 
-    if any(v < 200 for v in global_counts.values()):
+    if any(v < 200 for v in merged.values()):
         print("\n⚠️  WARNING: Some classes have < 200 samples.")
         print("   Annotate more videos before training the classifier.")
 

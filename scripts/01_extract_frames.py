@@ -134,35 +134,82 @@ def extract_frames_for_version(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Incremental processing helpers
+# ─────────────────────────────────────────────────────────────────────────────
+DONE_MARKER = ".done"  # written inside FRAMES_DIR/vX/ after successful extraction
+
+
+def is_extracted(vdir: Path) -> bool:
+    """Return True if this version has already been fully extracted."""
+    return (FRAMES_DIR / vdir.name / DONE_MARKER).exists()
+
+
+def mark_extracted(vdir: Path) -> None:
+    """Write the .done sentinel so future runs skip this version."""
+    marker = FRAMES_DIR / vdir.name / DONE_MARKER
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("ok")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="Extract annotated frames for all version folders")
-    parser.add_argument("--max_versions", type=int, default=10,
-                        help="Maximum number of version folders to process (default: 10)")
-    parser.add_argument("--width", type=int, default=1280)
-    parser.add_argument("--height", type=int, default=720)
+    parser.add_argument("--width",   type=int, default=1280)
+    parser.add_argument("--height",  type=int, default=720)
     parser.add_argument("--quality", type=int, default=95, help="JPEG quality 0-100")
+    parser.add_argument(
+        "--force", nargs="*", metavar="VERSION",
+        help=(
+            "Force re-extraction even if already done. "
+            "Pass specific versions (e.g. --force v13 v14) or bare --force for ALL."
+        ),
+    )
     args = parser.parse_args()
+
+    # Resolve which versions to force-reprocess
+    force_all = args.force is not None and len(args.force) == 0
+    force_set = set(args.force) if args.force else set()
 
     resize = (args.width, args.height)
     print(f"\n📽️  Frame Extraction — Target: {resize[0]}×{resize[1]} JPEG Q{args.quality}")
-    print(f"   Processing {len(VERSION_FOLDERS)} version folders...\n")
+    print(f"   Discovered {len(VERSION_FOLDERS)} version folder(s)\n")
 
+    skipped   = []
+    processed = []
     all_stats = []
+
     for vdir in VERSION_FOLDERS:
+        force_this = force_all or (vdir.name in force_set)
+
+        # ── Skip if already done ─────────────────────────────────────────────
+        if is_extracted(vdir) and not force_this:
+            print(f"  ⏭️  [{vdir.name}] already extracted — skipping "
+                  f"(use --force {vdir.name} to redo)")
+            skipped.append(vdir.name)
+            continue
+
+        # ── Extract ──────────────────────────────────────────────────────────
         try:
             stats = extract_frames_for_version(vdir, FRAMES_DIR, resize, args.quality)
             all_stats.append(stats)
+            mark_extracted(vdir)          # ← write sentinel on success
+            processed.append(vdir.name)
         except Exception as e:
-            print(f"  ❌ Error processing {vdir.name}: {e}")
+            print(f"  ❌ [{vdir.name}] Error: {e}")
 
-    # Global summary
+    # ── Summary ──────────────────────────────────────────────────────────────
     total_saved = sum(
         vid["frames_saved"]
         for s in all_stats
         for vid in s["videos"]
     )
-    print(f"\n✅ Done. Total frames extracted: {total_saved}")
-    print(f"   Output root: {FRAMES_DIR}")
+    print(f"\n{'='*55}")
+    print(f"  📽️  Frame Extraction Complete")
+    print(f"  Processed : {processed}")
+    print(f"  Skipped   : {skipped}  (already done)")
+    print(f"  New frames: {total_saved}")
+    print(f"  Output    : {FRAMES_DIR}")
+    print(f"{'='*55}\n")
 
 
 if __name__ == "__main__":

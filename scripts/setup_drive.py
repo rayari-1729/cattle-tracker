@@ -87,7 +87,7 @@ print(f"   Logs      : {LOGS_DIR}")
 # ─────────────────────────────────────────────────────────────────────────────
 # 4.  Discover version folders (v1, v2, …)
 # ─────────────────────────────────────────────────────────────────────────────
-def get_version_folders(max_versions: int = 10) -> list[Path]:
+def get_version_folders(max_versions: int = 50) -> list[Path]:
     """
     Returns sorted list of version dirs that actually exist on Drive.
     Each folder must contain at least one .mp4 AND an annotations.xml.
@@ -107,4 +107,4 @@ def get_version_folders(max_versions: int = 10) -> list[Path]:
     return found
 
 
-VERSION_FOLDERS = get_version_folders(max_versions=10)
+VERSION_FOLDERS = get_version_folders(max_versions=50)  # covers v1–v50; increase if needed

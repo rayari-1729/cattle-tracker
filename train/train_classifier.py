@@ -28,7 +28,7 @@ import numpy as np
 from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.00_setup_drive import CROPS_DIR, MODELS_DIR, LOGS_DIR  # type: ignore
+from scripts.setup_drive import CROPS_DIR, MODELS_DIR, LOGS_DIR  # type: ignore
 
 BEHAVIORS = [
     "standing", "eating", "walking", "drinking",
@@ -163,12 +163,27 @@ def train_classifier(
     train_set = _SubsetWithTransform(train_ds, TRAIN_TRANSFORM)
     val_set   = _SubsetWithTransform(val_ds,   VAL_TRANSFORM)
 
+    # Build weighted sampler — one weight per train sample based on its class count.
+    # class_weights[label] = 1 / count(label) so rare classes get sampled more.
+    # This actually applies the imbalance fix — the old code defined it but never used it.
+    class_inv_freq = [1.0 / max(full_ds.class_counts[b], 1) for b in BEHAVIORS]
+    train_sample_weights = [
+        class_inv_freq[full_ds.samples[i][1]]   # full_ds.samples[i] = (path, label_idx)
+        for i in train_ds.indices
+    ]
+    train_sampler = WeightedRandomSampler(
+        train_sample_weights, len(train_sample_weights), replacement=True
+    )
+
+    # num_workers=0 is required on Colab — Drive-backed DataLoaders deadlock
+    # with num_workers > 0 (forked workers can't access the mounted Drive).
+    # shuffle=False on train_loader: sampler handles shuffling (both together = conflict)
     train_loader = DataLoader(
-        train_set, batch_size=batch_size, num_workers=2,
-        pin_memory=True, shuffle=True
+        train_set, batch_size=batch_size, num_workers=0,
+        pin_memory=True, sampler=train_sampler
     )
     val_loader = DataLoader(
-        val_set, batch_size=batch_size, num_workers=2,
+        val_set, batch_size=batch_size, num_workers=0,
         pin_memory=True, shuffle=False
     )
 

@@ -3,7 +3,8 @@
 > **Pipeline**: YOLOv8 Detection → ByteTrack Tracking → MobileNetV3 Behavior Classification  
 > **Platform**: Google Colab Pro+ (A100 GPU)  
 > **Data format**: Version folders (`v1/`, `v2/`, …), each with one `.mp4` + `annotations.xml`  
-> **Behaviors**: `standing`, `walking`, `eating`, `drinking`, `lying_down`, `rumination`, `sleeping`
+> **Behaviors**: `standing`, `walking`, `eating`, `drinking`, `lying_down`, `rumination`, `sleeping`  
+> **Current dataset**: 34 annotated videos (`v1`–`v34`)
 
 ---
 
@@ -12,10 +13,10 @@
 ```
 experiment/
 ├── scripts/
-│   ├── 00_setup_drive.py         ← Drive mount + all path constants (run first)
-│   ├── 01_extract_frames.py      ← Extract annotated frames from each version folder
-│   ├── 02_cvat_to_yolo.py        ← CVAT XML → YOLO detection labels + dataset.yaml
-│   ├── 03_generate_crops.py      ← Generate 224×224 behavior crops for classifier
+│   ├── setup_drive.py            ← Drive mount + all path constants (imported by all scripts)
+│   ├── 01_extract_frames.py      ← Extract annotated frames from each version folder [incremental]
+│   ├── 02_cvat_to_yolo.py        ← CVAT XML → YOLO detection labels + dataset.yaml [incremental]
+│   ├── 03_generate_crops.py      ← Generate 224×224 behavior crops for classifier [incremental]
 │   ├── 04_check_dataset_stats.py ← Dataset health check (run before every training)
 │   └── 05_visualize_annotations.py ← Draw bounding boxes on frames (sanity check)
 │
@@ -59,7 +60,7 @@ MyDrive/
     │   ├── v2/
     │   │   ├── <video_name>.mp4
     │   │   └── annotations.xml
-    │   ├── v3/ ... v10/               ← first 10 videos for Phase 1
+    │   └── v3/ ... vN/               ← add more versions as you annotate
     ├── processed/                     ← auto-created by pipeline
     ├── models/checkpoints/            ← weights saved here (persists across sessions)
     └── logs/experiments/              ← JSON metrics per experiment run
@@ -95,9 +96,9 @@ Always set: **Runtime → Change runtime type → A100 GPU**
 | 1 | Install dependencies | 2 min |
 | 2 | Mount Drive + pull code | 1 min |
 | 3 | Setup paths + discover version folders | <1 min |
-| 4 | Extract annotated frames from all `v1..v10` | 2–5 min |
-| 5 | CVAT XML → YOLO labels + `dataset.yaml` | <1 min |
-| 6 | Generate behavior crops for classifier | 2–5 min |
+| 4 | Extract annotated frames *(incremental — skips already-done)* | 2–5 min for new videos only |
+| 5 | CVAT XML → YOLO labels + `dataset.yaml` *(incremental)* | <1 min for new videos only |
+| 6 | Generate behavior crops *(incremental)* | 2–5 min for new videos only |
 | 7 | **Dataset health check** (⚠️ always run) | <1 min |
 | 8 | Visualize annotations (sanity check) | <1 min |
 | 9 | Train YOLOv8 detector | 30–60 min |
@@ -105,6 +106,63 @@ Always set: **Runtime → Change runtime type → A100 GPU**
 | 11 | Evaluate + compare experiments | 5 min |
 | 12 | Run inference on a new video | 5–15 min |
 | 13 | Add more videos + retrain | iterative |
+
+---
+
+## 🔁 Incremental Processing (Adding New Videos)
+
+Scripts `01`, `02`, and `03` are **incremental** — they remember which versions they've already processed using small sentinel files on Drive, and **skip them automatically** on the next run.
+
+### How it works
+
+| Script | Sentinel file | Stored info |
+|--------|--------------|-------------|
+| `01_extract_frames.py` | `processed/frames/vX/.done` | marker only |
+| `02_cvat_to_yolo.py` | `processed/yolo_detection/.proc/vX.json` | split, frame count, behavior stats |
+| `03_generate_crops.py` | `processed/behavior_crops/.done_vX.json` | per-behavior crop counts |
+
+### Adding a new video (e.g. v35)
+
+1. Upload `v35/` to Drive (with `.mp4` + `annotations.xml`)
+2. Re-run the pipeline cells — **v1–v34 are skipped instantly**, only v35 is processed:
+
+```bash
+python scripts/01_extract_frames.py          # ⏭ v1–v34 skipped | ✅ v35 extracted
+python scripts/02_cvat_to_yolo.py            # ⏭ v1–v34 cached  | ✅ v35 converted
+python scripts/03_generate_crops.py          # ⏭ v1–v34 skipped | ✅ v35 cropped
+```
+
+> `dataset.yaml` and `dataset_stats.json` are always **fully rebuilt** from all versions (old + new) so they stay complete and accurate.
+
+### Specifying the train/val split for new videos
+
+New videos default to **train**. To designate a new video as val:
+
+```bash
+# Manual mode — fastest (recommended)
+python scripts/02_cvat_to_yolo.py --split_mode manual --val_versions v7 v35
+
+# Auto mode — picks val versions by frame count to hit ~20%
+python scripts/02_cvat_to_yolo.py --split_mode auto --val_split 0.2
+```
+
+> **Note**: The split for already-processed versions is **locked in** their proc record and never changed by subsequent runs. Only new versions get assigned a split.
+
+### Force re-processing a version
+
+Use `--force` if you re-annotated a video and need to regenerate its output:
+
+```bash
+# Re-process only v7 (e.g. you fixed annotations)
+python scripts/01_extract_frames.py --force v7
+python scripts/02_cvat_to_yolo.py   --force v7
+python scripts/03_generate_crops.py --force v7
+
+# Re-process everything from scratch (nuclear option)
+python scripts/01_extract_frames.py --force
+python scripts/02_cvat_to_yolo.py   --force
+python scripts/03_generate_crops.py --force
+```
 
 ---
 
@@ -130,19 +188,6 @@ Example output:
 
 ---
 
-## 📈 Scaling Beyond 10 Videos
-
-When ready to add more videos:
-
-1. Upload `v11/`, `v12/`, etc. to Drive (same structure: mp4 + xml)
-2. Re-run Cells 3–11 — they **auto-discover** new version folders
-3. Cell 11 will **automatically compare** new experiment results against all previous runs
-
-> **Note**: Video-level train/val split is re-randomized each time (seed=42).  
-> This means adding more videos gradually expands both splits proportionally.
-
----
-
 ## ⚠️ Acceptance Criteria
 
 ### Detector (before proceeding to classifier)
@@ -155,7 +200,7 @@ When ready to add more videos:
 
 ### Classifier
 | Metric | Target | Minimum |
-|--------|--------|---------|
+|--------|--------|---------| 
 | Overall Val Accuracy | > 0.80 | > 0.65 |
 | Per-class Recall | > 0.75 | > 0.60 |
 | sleep vs lying_down confusion | < 30% | < 50% |
@@ -171,6 +216,7 @@ When ready to add more videos:
 | Only 3/7 behaviors in early videos | Classifier can't train | Annotate eating/lying/rumination/sleeping |
 | Window backlight | Silhouette frames | `hsv_v=0.5` augmentation (set in config) |
 | sleep vs lying_down | ~30% confusion | Use LSTM temporal classifier (next iteration) |
+| `num_workers > 0` on Colab | DataLoader deadlock on Drive | Fixed: `num_workers=0` in `train_classifier.py` |
 
 ---
 
@@ -179,26 +225,26 @@ When ready to add more videos:
 ```bash
 # From experiment/ directory:
 
-# Step 1: check what Drive has
+# Step 0: health check — see what's already processed
 python scripts/04_check_dataset_stats.py
 
-# Step 2: extract frames
-python scripts/01_extract_frames.py --max_versions 10
+# Step 1: extract frames (skips already-done versions)
+python scripts/01_extract_frames.py
 
-# Step 3: convert annotations
-python scripts/02_cvat_to_yolo.py --val_split 0.2
+# Step 2: convert annotations (manual split — fast path)
+python scripts/02_cvat_to_yolo.py --split_mode manual --val_versions v7
 
-# Step 4: generate crops
+# Step 3: generate crops (skips already-done versions)
 python scripts/03_generate_crops.py
 
-# Step 5: train
-python train/train_detector.py --epochs 30 --batch 8
+# Step 4: train
+python train/train_detector.py --epochs 100 --batch 8
 python train/train_classifier.py --epochs 50
 
-# Step 6: evaluate
+# Step 5: evaluate
 python evaluation/eval_pipeline.py --phase all
 
-# Step 7: inference
+# Step 6: inference
 python inference/pipeline.py \
     --video data/v1/video.mp4 \
     --detector models/checkpoints/detector_<ts>/weights/best.pt \
@@ -210,10 +256,10 @@ python inference/pipeline.py \
 
 ## 📚 Reference
 
-- Full architecture decisions: Aritra 
-- Annotation guidelines: Nill
-- Iteration checklist: Nill
+- Full architecture decisions → `cookbook/CATTLE_ANALYTICS_COOKBOOK.md`
+- Annotation guidelines → `cookbook/CATTLE_ANALYTICS_COOKBOOK.md §12`
+- Iteration checklist → `cookbook/CATTLE_ANALYTICS_COOKBOOK.md §13`
 
 ---
 
-*Maintained by Aritra & Nimai  · Updated: May 2026 · Version: Phase-1 (10 videos)*
+*Maintained by Aritra & Nimai · Updated: May 2026 · Version: Phase-1 (34 videos)*

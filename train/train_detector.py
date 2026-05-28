@@ -18,9 +18,14 @@ import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
+import os
+
+os.environ["WANDB_DISABLED"] = "true"
+os.environ["WANDB_MODE"]     = "disabled"
+os.environ["WANDB_SILENT"]   = "true"
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.00_setup_drive import YOLO_DIR, MODELS_DIR, LOGS_DIR  # type: ignore
+from scripts.setup_drive import YOLO_DIR, MODELS_DIR, LOGS_DIR  # type: ignore
 
 try:
     from ultralytics import YOLO
@@ -55,6 +60,10 @@ def train_detector(
         )
 
     model = YOLO(model_name)
+
+    # Persist wandb=off to ultralytics settings
+    from ultralytics import settings as ult_settings
+    ult_settings.update({"wandb": False})
 
     train_args = dict(
         data       = str(yaml_path),
