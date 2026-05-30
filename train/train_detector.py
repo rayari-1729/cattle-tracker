@@ -34,10 +34,28 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+def _verify_gpu() -> str:
+    """Print GPU info and return device string. Raises if no GPU found."""
+    import torch
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "No CUDA GPU found. Set runtime to A100: "
+            "Runtime → Change runtime type → A100 GPU"
+        )
+    name  = torch.cuda.get_device_name(0)
+    vram  = torch.cuda.get_device_properties(0).total_memory / 1e9
+    print(f"  🖥️  GPU  : {name}")
+    print(f"  💾 VRAM : {vram:.1f} GB")
+    # cuDNN auto-tuner — critical for A100 throughput
+    torch.backends.cudnn.benchmark = True
+    return "cuda:0"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 def train_detector(
     model_name: str = "yolov8s.pt",
     epochs: int = 100,
-    batch: int = 8,
+    batch: int = 16,        # A100 40 GB handles batch=16 at imgsz=1280 comfortably
     imgsz: int = 1280,
     patience: int = 20,
     extra_overrides: dict = None,
@@ -59,6 +77,8 @@ def train_detector(
             "Run 02_cvat_to_yolo.py first."
         )
 
+    _verify_gpu()   # fails fast if running on CPU by mistake
+
     model = YOLO(model_name)
 
     # Persist wandb=off to ultralytics settings
@@ -79,21 +99,26 @@ def train_detector(
         val        = True,
         plots      = True,
         verbose    = True,
-        # Augmentation tuned for indoor fixed-camera top-down view
+        # ── A100 performance ─────────────────────────────────────
+        device     = 0,         # explicit GPU 0 — never falls back to CPU silently
+        amp        = True,      # automatic mixed precision (bfloat16 on A100)
+        cache      = "ram",     # cache all frames in RAM — A100 instances have ~85 GB
+        workers    = 8,         # Drive→RAM loader threads; 8 is sweet-spot on Colab
+        # ── Augmentation: indoor fixed-camera, top-down pen view ─
         degrees    = 5.0,
-        flipud     = 0.0,
+        flipud     = 0.0,       # no vertical flip — camera orientation fixed
         fliplr     = 0.5,
-        mosaic     = 0.5,
+        mosaic     = 0.5,       # reduced (small dataset); set to 1.0 when >50 videos
         hsv_h      = 0.015,
         hsv_s      = 0.7,
-        hsv_v      = 0.5,      # higher than default; handles backlight
+        hsv_v      = 0.5,       # handles backlight from window
         translate  = 0.1,
         scale      = 0.5,
         shear      = 2.0,
         perspective= 0.0005,
-        # Reproducibility
-        seed       = 42,
-        deterministic = True,
+        # ── Reproducibility ──────────────────────────────────────
+        seed          = 42,
+        deterministic = False,  # True kills cuDNN auto-tuner → 30%+ slower on A100
     )
 
     if extra_overrides:
@@ -158,10 +183,12 @@ def main():
     parser.add_argument("--model",   default="yolov8s.pt",
                         help="YOLO model variant (yolov8n.pt / yolov8s.pt / yolov8m.pt)")
     parser.add_argument("--epochs",  type=int, default=100)
-    parser.add_argument("--batch",   type=int, default=8,
-                        help="Batch size. Use 4 if OOM on T4, 16 on A100.")
+    parser.add_argument("--batch",   type=int, default=16,
+                        help="Batch size. A100=16, T4=8, OOM→halve it.")
     parser.add_argument("--imgsz",   type=int, default=1280)
     parser.add_argument("--patience",type=int, default=20)
+    parser.add_argument("--cache",   default="ram",
+                        help="ultralytics cache mode: ram / disk / False")
     args = parser.parse_args()
 
     train_detector(

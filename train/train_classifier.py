@@ -15,6 +15,7 @@ Run:
 
 import torch
 import torch.nn as nn
+import torch.cuda.amp as amp_module
 import torchvision.transforms as T
 from torchvision.models import mobilenet_v3_small, MobileNet_V3_Small_Weights
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler, random_split
@@ -29,6 +30,23 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.setup_drive import CROPS_DIR, MODELS_DIR, LOGS_DIR  # type: ignore
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+def _verify_gpu() -> str:
+    """Print GPU info and return device string. Raises if no GPU found."""
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "No CUDA GPU found. Set runtime to A100: "
+            "Runtime → Change runtime type → A100 GPU"
+        )
+    name = torch.cuda.get_device_name(0)
+    vram = torch.cuda.get_device_properties(0).total_memory / 1e9
+    print(f"  🖥️  GPU  : {name}")
+    print(f"  💾 VRAM : {vram:.1f} GB")
+    # cuDNN auto-tuner — picks fastest conv kernels on first forward pass
+    torch.backends.cudnn.benchmark = True
+    return "cuda"
 
 BEHAVIORS = [
     "standing", "eating", "walking", "drinking",
@@ -122,7 +140,7 @@ class BehaviorClassifier(nn.Module):
 def train_classifier(
     crops_dir: Path = CROPS_DIR,
     epochs: int = 50,
-    batch_size: int = 64,
+    batch_size: int = 256,  # MobileNetV3-Small is tiny; A100 handles 256 easily
     lr: float = 1e-4,
     val_split: float = 0.2,
     device: str = "cuda",
@@ -131,6 +149,8 @@ def train_classifier(
     exp_name  = f"classifier_{timestamp}"
     out_dir   = MODELS_DIR / exp_name
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    device = _verify_gpu()   # fails fast if running on CPU by mistake
 
     print(f"\n{'='*60}")
     print(f"  🧠 Classifier Experiment : {exp_name}")
@@ -176,8 +196,8 @@ def train_classifier(
     )
 
     # num_workers=0 is required on Colab — Drive-backed DataLoaders deadlock
-    # with num_workers > 0 (forked workers can't access the mounted Drive).
-    # shuffle=False on train_loader: sampler handles shuffling (both together = conflict)
+    # with num_workers > 0 (forked workers can’t access the mounted Drive).
+    # pin_memory + non_blocking — overlaps CPU→GPU transfer with compute on A100.
     train_loader = DataLoader(
         train_set, batch_size=batch_size, num_workers=0,
         pin_memory=True, sampler=train_sampler
@@ -189,6 +209,20 @@ def train_classifier(
 
     # ── Model ────────────────────────────────────────────────────────────────
     model = BehaviorClassifier().to(device)
+
+    # torch.compile — compiles model graph for A100 Triton kernels.
+    # Gives 10–30% throughput boost on small models like MobileNetV3.
+    # Falls back gracefully if PyTorch < 2.0.
+    if hasattr(torch, "compile"):
+        try:
+            model = torch.compile(model)
+            print("  ⚡ torch.compile() enabled (A100 Triton kernels)")
+        except Exception as e:
+            print(f"  ⚠️  torch.compile skipped: {e}")
+
+    # AMP GradScaler — handles gradient scaling for float16/bfloat16 stability.
+    # autocast() wraps forward + loss; scaler wraps backward + optimizer step.
+    scaler = amp_module.GradScaler()
 
     # Class-weighted loss
     counts = [full_ds.class_counts[b] for b in BEHAVIORS]
@@ -210,26 +244,38 @@ def train_classifier(
         model.train()
         t_loss = t_cor = t_tot = 0
         for imgs, labels in train_loader:
-            imgs, labels = imgs.to(device), labels.to(device)
-            optimizer.zero_grad()
-            out  = model(imgs)
-            loss = criterion(out, labels)
-            loss.backward()
-            optimizer.step()
+            # non_blocking overlaps CPU→GPU copy with GPU compute — free speedup
+            imgs   = imgs.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+
+            # set_to_none=True is faster than zero_grad() — skips memset
+            optimizer.zero_grad(set_to_none=True)
+
+            # AMP forward pass — bfloat16 on A100 is ~2× faster than float32
+            with amp_module.autocast(device_type="cuda"):
+                out  = model(imgs)
+                loss = criterion(out, labels)
+
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
             t_loss += loss.item()
-            preds   = out.argmax(1)
+            preds   = out.detach().argmax(1)
             t_cor  += (preds == labels).sum().item()
             t_tot  += labels.size(0)
         scheduler.step()
 
-        # Validate
+        # Validate — no grad, no AMP needed for val (but autocast is fine too)
         model.eval()
         v_loss = v_cor = v_tot = 0
         with torch.no_grad():
             for imgs, labels in val_loader:
-                imgs, labels = imgs.to(device), labels.to(device)
-                out  = model(imgs)
-                loss = criterion(out, labels)
+                imgs   = imgs.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
+                with amp_module.autocast(device_type="cuda"):
+                    out  = model(imgs)
+                    loss = criterion(out, labels)
                 v_loss += loss.item()
                 preds   = out.argmax(1)
                 v_cor  += (preds == labels).sum().item()
@@ -294,7 +340,8 @@ def train_classifier(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs",    type=int,   default=50)
-    parser.add_argument("--batch",     type=int,   default=64)
+    parser.add_argument("--batch",     type=int,   default=256,
+                        help="Batch size. A100=256 for MobileNetV3; halve if OOM.")
     parser.add_argument("--lr",        type=float, default=1e-4)
     parser.add_argument("--val_split", type=float, default=0.2)
     parser.add_argument("--device",    type=str,   default="cuda")
