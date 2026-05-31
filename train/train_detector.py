@@ -35,7 +35,7 @@ except ImportError:
 
 # ─────────────────────────────────────────────────────────────────────────────
 def _verify_gpu() -> str:
-    """Print GPU info and return device string. Raises if no GPU found."""
+    """Print GPU info, enable A100 hardware flags, raise if no GPU found."""
     import torch
     if not torch.cuda.is_available():
         raise RuntimeError(
@@ -46,8 +46,13 @@ def _verify_gpu() -> str:
     vram  = torch.cuda.get_device_properties(0).total_memory / 1e9
     print(f"  🖥️  GPU  : {name}")
     print(f"  💾 VRAM : {vram:.1f} GB")
-    # cuDNN auto-tuner — critical for A100 throughput
-    torch.backends.cudnn.benchmark = True
+    # TF32: A100 tensor cores run matmul in TF32 natively (~3x vs float32).
+    # PyTorch disables it by default for reproducibility — safe to enable for training.
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32       = True
+    # cuDNN auto-tuner — benchmarks conv kernels on first batch, then uses fastest
+    torch.backends.cudnn.benchmark        = True
+    print("  ⚡ TF32 enabled  |  cuDNN benchmark ON")
     return "cuda:0"
 
 
@@ -70,10 +75,22 @@ def train_detector(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     exp_name  = f"detector_{timestamp}"
 
-    yaml_path = YOLO_DIR / "dataset.yaml"
-    if not yaml_path.exists():
+    # ── Resolve dataset path: prefer local NVMe copy over Drive ────────────────────
+    # Google Drive throttles at ~3k small files — local NVMe is 100x faster.
+    # Run the 'Copy Dataset to Local NVMe' notebook cell before training to get this.
+    LOCAL_YOLO = Path("/content/local_yolo")
+    drive_yaml = YOLO_DIR / "dataset.yaml"
+    local_yaml = LOCAL_YOLO / "dataset.yaml"
+
+    if local_yaml.exists():
+        yaml_path = local_yaml
+        print(f"  🚀 Using LOCAL NVMe dataset: {LOCAL_YOLO}")
+    elif drive_yaml.exists():
+        yaml_path = drive_yaml
+        print(f"  📂 Using Drive dataset (slow). Run 'Copy to Local NVMe' cell for faster training.")
+    else:
         raise FileNotFoundError(
-            f"dataset.yaml not found at {yaml_path}. "
+            f"dataset.yaml not found at {drive_yaml} or {local_yaml}. "
             "Run 02_cvat_to_yolo.py first."
         )
 

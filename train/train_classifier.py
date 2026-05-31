@@ -34,7 +34,7 @@ from scripts.setup_drive import CROPS_DIR, MODELS_DIR, LOGS_DIR  # type: ignore
 
 # ─────────────────────────────────────────────────────────────────────────────
 def _verify_gpu() -> str:
-    """Print GPU info and return device string. Raises if no GPU found."""
+    """Print GPU info, enable A100 hardware flags, raise if no GPU found."""
     if not torch.cuda.is_available():
         raise RuntimeError(
             "No CUDA GPU found. Set runtime to A100: "
@@ -44,8 +44,13 @@ def _verify_gpu() -> str:
     vram = torch.cuda.get_device_properties(0).total_memory / 1e9
     print(f"  🖥️  GPU  : {name}")
     print(f"  💾 VRAM : {vram:.1f} GB")
-    # cuDNN auto-tuner — picks fastest conv kernels on first forward pass
-    torch.backends.cudnn.benchmark = True
+    # TF32: A100 tensor cores run matmul in TF32 natively (~3x vs float32).
+    # PyTorch disables it by default for reproducibility — safe to enable for training.
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32       = True
+    # cuDNN auto-tuner — benchmarks conv kernels on first batch, then uses fastest
+    torch.backends.cudnn.benchmark        = True
+    print("  ⚡ TF32 enabled  |  cuDNN benchmark ON")
     return "cuda"
 
 BEHAVIORS = [
@@ -152,12 +157,23 @@ def train_classifier(
 
     device = _verify_gpu()   # fails fast if running on CPU by mistake
 
+    # ── Resolve crops path: prefer local NVMe copy over Drive ────────────────
+    # Drive throttles on thousands of small JPEG reads during training.
+    # Run the 'Copy Dataset to Local NVMe' notebook cell to pre-copy crops once.
+    LOCAL_CROPS = Path("/content/local_crops")
+    if LOCAL_CROPS.exists() and any(LOCAL_CROPS.iterdir()):
+        crops_dir = LOCAL_CROPS
+        print(f"  🚀 Using LOCAL NVMe crops: {LOCAL_CROPS}")
+    else:
+        print(f"  📂 Using Drive crops (slow). Run 'Copy to Local NVMe' cell for faster training.")
+
     print(f"\n{'='*60}")
     print(f"  🧠 Classifier Experiment : {exp_name}")
     print(f"  Crops dir  : {crops_dir}")
     print(f"  Epochs     : {epochs}  |  Batch: {batch_size}  |  LR: {lr}")
     print(f"  Device     : {device}")
     print(f"{'='*60}\n")
+
 
     # ── Dataset ──────────────────────────────────────────────────────────────
     full_ds = BehaviorCropDataset(crops_dir, transform=None)
